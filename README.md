@@ -44,7 +44,7 @@ Here by we describe the relevant contract methods:
 
 ---------------------
 
-3. Calculate Permium Price In USDC:
+3. Calculate Premium Price In USDC:
 
 * Contract Name: `ILProtectionController`
 * Method Name: `calculatePremiumAndMaxAmountToBePaid`
@@ -67,7 +67,7 @@ Here by we describe the relevant contract methods:
 4. Buy Protection:
 
 * Contract Name: `ILProtectionController`
-* Method Name: `calculatePremiumAndMaxAmountToBePaid`
+* Method Name: `buyProtection`
 * Input:
     ```typescript
     _token1Symbol: string,
