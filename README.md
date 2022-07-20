@@ -1,4 +1,4 @@
-# IL Contracts Integration
+# Armadillo Contracts Integration
 
 The following readme describes the methods to integration to CVI's Impermanent Loss product directly using the contracts as dapp.
 
