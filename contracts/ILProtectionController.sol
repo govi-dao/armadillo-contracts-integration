@@ -18,6 +18,8 @@ struct ILProtectionWithMetadata {
   uint256 amountPaidOnPolicyClose;
   uint256 mappingIdx;
   bool exists;
+  uint256 fee;
+  uint16 feeComponent;
 }
 
 contract ILProtectionController is ILProtectionControllerInterface, BaseController {
@@ -36,6 +38,8 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
   mapping(uint256 => ILProtectionWithMetadata) public openProtectionsWithMetadata;
   mapping(uint256 => ILProtectionWithMetadata) public closedProtectionsWithMetadata;
   uint256 public maxProtectionsInUpkeep;
+  uint256 public override cumulativeSumLPTokensWorthAtBuyTimeUSD;
+  mapping(string => mapping(string => uint256)) public pairsCollaterals;
 
   modifier noOpenProtections() {
     require(openProtectionsIds.length == 0, 'Cannot change value with existing open protections');
@@ -97,8 +101,9 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     TokenPair memory pair = tokenPairRepository.getOrderedTokenPairIfExists(_token1Symbol, _token2Symbol);
 
     totalLPTokensWorthAtBuyTimeUSD += _lpTokensWorthAtBuyTimeUSD;
+    cumulativeSumLPTokensWorthAtBuyTimeUSD += _lpTokensWorthAtBuyTimeUSD;
 
-    (uint256 premiumCost, uint256 maxAmountToBePaid) = calculatePremiumAndMaxAmountToBePaid(
+    (uint256 premiumCost, uint256 fee, uint256 maxAmountToBePaid) = calculatePremiumDetailsAndMaxAmountToBePaid(
       pair.token1Symbol,
       pair.token2Symbol,
       _lpTokensWorthAtBuyTimeUSD,
@@ -113,20 +118,39 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
 
     require(collateral < liquidityController.liquidity() + premiumCost, 'Not enough collateral to pay back buyer');
 
-    liquidityController.addLiquidity(msg.sender, premiumCost);
+    validateAndUpdatePairCollateral(
+      pair.token1Symbol,
+      pair.token2Symbol,
+      maxAmountToBePaid,
+      liquidityController.liquidity() + premiumCost
+    );
+
+    uint256 createdProtectionId = protectionNFT.tokenIdCounter();
+
+    if (fee > 0) {
+      liquidityController.addLiquidityWithProtectionFee(
+        createdProtectionId,
+        msg.sender,
+        premiumCost,
+        fee,
+        protectionConfig.feeComponent()
+      );
+    } else {
+      liquidityController.addLiquidity(msg.sender, premiumCost);
+    }
+
+    uint256 premiumCostWithFee = premiumCost + fee;
 
     protectionNFT.mint(
       msg.sender,
       block.timestamp,
       calcPolicyPeriodEnd(_policyPeriod),
-      premiumCost,
+      premiumCostWithFee,
       _lpTokensWorthAtBuyTimeUSD,
       pair.token1Symbol,
       pair.token2Symbol,
       _policyPeriod
     );
-
-    uint256 createdProtectionId = protectionNFT.tokenIdCounter() - 1;
 
     openProtectionsIds.push(createdProtectionId);
 
@@ -139,7 +163,9 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
       amountPaidOnPolicyClose: 0,
       maxAmountToBePaid: maxAmountToBePaid,
       mappingIdx: openProtectionsIds.length - 1,
-      exists: true
+      exists: true,
+      fee: fee,
+      feeComponent: protectionConfig.feeComponent()
     });
 
     emit ProtectionBought(
@@ -147,13 +173,25 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
       msg.sender,
       block.timestamp,
       calcPolicyPeriodEnd(_policyPeriod),
-      premiumCost,
+      premiumCostWithFee,
       pair.token1Symbol,
       pair.token2Symbol,
       _policyPeriod,
       openProtectionsWithMetadata[createdProtectionId].token1EntryPriceUSD,
       openProtectionsWithMetadata[createdProtectionId].token2EntryPriceUSD,
       collateral
+    );
+
+    emit CollateralUpdated(
+      pair.token1Symbol,
+      pair.token2Symbol,
+      createdProtectionId,
+      pairsCollaterals[pair.token1Symbol][pair.token2Symbol] - maxAmountToBePaid,
+      pairsCollaterals[pair.token1Symbol][pair.token2Symbol],
+      collateral - maxAmountToBePaid,
+      collateral,
+      liquidityController.liquidity() - premiumCost,
+      liquidityController.liquidity()
     );
   }
 
@@ -182,7 +220,7 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
           false
         );
 
-        (uint256 amountToBePaid, , bool isBelowMin) = calcAmountToBePaidAndILWithProtectionDetails(
+        (uint256 amountToBePaid, bool isBelowMin) = calcAmountToBePaidWithProtectionDetails(
           protectionDetails,
           protectionWithMetadata,
           token1Price,
@@ -198,6 +236,9 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
         protectionWithMetadata.amountPaidOnPolicyClose = amountToBePaid;
 
         collateral -= protectionWithMetadata.maxAmountToBePaid;
+        pairsCollaterals[protectionDetails.token1Symbol][protectionDetails.token2Symbol] -= protectionWithMetadata
+          .maxAmountToBePaid;
+
         totalLPTokensWorthAtBuyTimeUSD -= protectionDetails.lpTokensWorthAtBuyTimeUSD;
 
         if (openProtectionsIds.length > 1) {
@@ -224,6 +265,19 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
           token1Price,
           token2Price,
           collateral
+        );
+
+        emit CollateralUpdated(
+          protectionDetails.token1Symbol,
+          protectionDetails.token2Symbol,
+          protectionDetails.id,
+          pairsCollaterals[protectionDetails.token1Symbol][protectionDetails.token2Symbol] +
+            closedProtectionsWithMetadata[protectionDetails.id].maxAmountToBePaid,
+          pairsCollaterals[protectionDetails.token1Symbol][protectionDetails.token2Symbol],
+          collateral + closedProtectionsWithMetadata[protectionDetails.id].maxAmountToBePaid,
+          collateral,
+          liquidityController.liquidity() + amountToBePaid,
+          liquidityController.liquidity()
         );
       }
     }
@@ -257,47 +311,6 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     uint256[] memory protectionsIds = abi.decode(_performData, (uint256[]));
 
     closeProtections(protectionsIds);
-  }
-
-  function setILProtectionConfig(ILProtectionConfigInterface _newInstance)
-    external
-    override
-    onlyAdmin
-    onlyValidAddress(address(_newInstance))
-  {
-    emit ILProtectionConfigChanged(protectionConfig, _newInstance);
-
-    protectionConfig = _newInstance;
-  }
-
-  function setTokenPairRepository(ITokenPairRepository _newInstance)
-    external
-    override
-    onlyAdmin
-    onlyValidAddress(address(_newInstance))
-    noOpenProtections
-  {
-    emit TokenPairRepositoryChanged(tokenPairRepository, _newInstance);
-
-    tokenPairRepository = _newInstance;
-  }
-
-  function setLiquidityController(ILiquidityController _newInstance)
-    external
-    override
-    onlyAdmin
-    onlyValidAddress(address(_newInstance))
-    noOpenProtections
-  {
-    emit LiquidityControllerChanged(liquidityController, _newInstance);
-
-    liquidityController = _newInstance;
-  }
-
-  function setCVIOracle(CVIOracle _newInstance) external override onlyAdmin onlyValidAddress(address(_newInstance)) {
-    emit CVIOracleChanged(cviOracle, _newInstance);
-
-    cviOracle = _newInstance;
   }
 
   function setMaxILProtected(uint16 _maxILProtected) external override onlyAdmin noOpenProtections {
@@ -334,7 +347,9 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     uint256 _liquidity,
     uint16 _maxILProtected,
     PremiumParams calldata _premiumParams,
-    uint256 _cvi
+    uint256 _cvi,
+    uint256 _premiumGrowthStart,
+    uint256 _premiumSlope
   ) public pure override returns (uint256) {
     require(_liquidity > 0, 'Liquidity must be larger than 0');
 
@@ -352,18 +367,29 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
         estimatedCollateral,
         _liquidity,
         _premiumParams,
-        _cvi
+        _cvi,
+        _premiumGrowthStart,
+        _premiumSlope
       );
   }
 
-  function calculatePremiumAndMaxAmountToBePaid(
+  function calculatePremiumDetailsAndMaxAmountToBePaid(
     string memory _token1Symbol,
     string memory _token2Symbol,
     uint256 _lpTokensWorthAtBuyTimeUSD,
     uint256 _policyPeriod
-  ) public view override returns (uint256, uint256) {
+  )
+    public
+    view
+    override
+    returns (
+      uint256 premium,
+      uint256 fee,
+      uint256 maxAmountToBePaid
+    )
+  {
     require(
-      _lpTokensWorthAtBuyTimeUSD <= calcMaxValueOfTokensWorthToProtect(),
+      _lpTokensWorthAtBuyTimeUSD <= calcMaxValueOfTokensWorthToProtect(_token1Symbol, _token2Symbol),
       'lpTokensWorthAtBuyTimeUSD > maxValueOfTokensWorthToProtect'
     );
 
@@ -375,33 +401,54 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
       _policyPeriod
     );
 
-    uint256 maxAmountToBePaid = calcEstimatedAmountToBePaid(
+    maxAmountToBePaid = calcEstimatedAmountToBePaid(
       _lpTokensWorthAtBuyTimeUSD,
       protectionConfig.expectedLPTokensValueGrowth(),
       protectionConfig.maxILProtected()
     );
 
-    uint256 premium = PremiumCalculator.calculatePremium(
+    premium = PremiumCalculator.calculatePremium(
       _lpTokensWorthAtBuyTimeUSD,
       collateral + maxAmountToBePaid,
       liquidity,
       premiumParams,
-      getCVI()
+      getCVI(),
+      protectionConfig.premiumGrowthStart(),
+      protectionConfig.premiumSlope()
     );
 
     require(collateral + maxAmountToBePaid <= liquidity + premium, 'Updated collateral is larger than liquidity');
 
-    return (premium, maxAmountToBePaid);
+    fee = calculateFee(_lpTokensWorthAtBuyTimeUSD, protectionConfig.feeComponent());
   }
 
-  function calcMaxValueOfTokensWorthToProtect() public view override returns (uint256) {
+  function calcMaxValueOfTokensWorthToProtect(string memory _token1Symbol, string memory _token2Symbol)
+    public
+    view
+    override
+    returns (uint256)
+  {
+    TokenPair memory pair = tokenPairRepository.getOrderedTokenPairIfExists(_token1Symbol, _token2Symbol);
+
     uint256 tokensValueGrowth = protectionConfig.expectedLPTokensValueGrowth();
 
     uint256 denominator = (tokensValueGrowth * MAX_PRECISION) /
       (MAX_PRECISION - protectionConfig.maxILProtected()) -
       tokensValueGrowth;
 
-    return ((liquidityController.liquidity() - collateral) * MAX_PRECISION) / denominator;
+    uint256 liquidity = liquidityController.liquidity();
+    uint256 collateralCap = calcCollateralCap(liquidity, _token1Symbol, _token2Symbol);
+
+    if (collateralCap > pairsCollaterals[pair.token1Symbol][pair.token2Symbol]) {
+      uint256 liquidityDelta = MathUtils.min(
+        collateralCap - pairsCollaterals[pair.token1Symbol][pair.token2Symbol],
+        liquidity - collateral
+      );
+
+      return (liquidityDelta * MAX_PRECISION) / denominator;
+    } else {
+      return 0;
+    }
   }
 
   function calcAmountToBePaidWithProtectionId(uint256 _protectionId) public view override returns (uint256) {
@@ -413,7 +460,7 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     uint256 token1Price = tokenPairRepository.getTokenPrice(protection.token1Symbol, protection.token2Symbol, true);
     uint256 token2Price = tokenPairRepository.getTokenPrice(protection.token1Symbol, protection.token2Symbol, false);
 
-    (uint256 amountToBePaid, , ) = calcAmountToBePaidAndILWithProtectionDetails(
+    (uint256 amountToBePaid, ) = calcAmountToBePaidWithProtectionDetails(
       protection,
       protectionWithMetadata,
       token1Price,
@@ -424,7 +471,6 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
   }
 
   function calcAmountToBePaid(
-    uint16 _impermanentLoss,
     uint256 _lpTokensWorthAtBuyTimeUSD,
     uint256 _token1EntryPrice,
     uint256 _token2EntryPrice,
@@ -432,6 +478,8 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     uint256 _token2EndPrice
   ) public view override returns (uint256) {
     uint8 priceTokenDecimals = tokenPairRepository.priceTokenDecimals();
+
+    uint16 impermanentLoss = calculateIL(_token1EntryPrice, _token2EntryPrice, _token1EndPrice, _token2EndPrice);
 
     uint256 pricesRatio = MathUtils.ratio(
       (MathUtils.ratio(_token1EndPrice, _token1EntryPrice, priceTokenDecimals) +
@@ -442,7 +490,7 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
 
     uint256 lpTokensWorthIfHeldUSD = (_lpTokensWorthAtBuyTimeUSD * pricesRatio) / 10**priceTokenDecimals;
 
-    return (lpTokensWorthIfHeldUSD * _impermanentLoss) / MAX_PRECISION;
+    return (lpTokensWorthIfHeldUSD * impermanentLoss) / MAX_PRECISION;
   }
 
   function calculateIL(
@@ -495,35 +543,46 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
     return (estimatedTokensWorthAtEnd * MAX_PRECISION) / (MAX_PRECISION - _impermanentLoss) - estimatedTokensWorthAtEnd;
   }
 
-  function calcAmountToBePaidAndILWithProtectionDetails(
+  function calculateFee(uint256 _lpTokensWorthAtBuyTimeUSD, uint16 _feeComponent)
+    public
+    pure
+    override
+    returns (uint256)
+  {
+    return (_lpTokensWorthAtBuyTimeUSD * _feeComponent) / MAX_PRECISION;
+  }
+
+  function validateAndUpdatePairCollateral(
+    string memory _token1Symbol,
+    string memory _token2Symbol,
+    uint256 _additionalCollateral,
+    uint256 _liquidity
+  ) internal {
+    uint256 cap = calcCollateralCap(_liquidity, _token1Symbol, _token2Symbol);
+
+    require(
+      cap >= pairsCollaterals[_token1Symbol][_token2Symbol] + _additionalCollateral,
+      'Pair collateral cap has been reached'
+    );
+
+    pairsCollaterals[_token1Symbol][_token2Symbol] += _additionalCollateral;
+  }
+
+  function calcCollateralCap(
+    uint256 _liquidity,
+    string memory _token1Symbol,
+    string memory _token2Symbol
+  ) internal view returns (uint256) {
+    return (_liquidity * tokenPairRepository.getCollateralCapComponent(_token1Symbol, _token2Symbol)) / MAX_PRECISION;
+  }
+
+  function calcAmountToBePaidWithProtectionDetails(
     ProtectionNFTDetails memory _protection,
     ILProtectionWithMetadata storage _protectionWithMetadata,
     uint256 _token1EndPrice,
     uint256 _token2EndPrice
-  )
-    internal
-    view
-    returns (
-      uint256,
-      uint16,
-      bool
-    )
-  {
-    uint16 impermanentLoss = calculateIL(
-      _protectionWithMetadata.token1EntryPriceUSD,
-      _protectionWithMetadata.token2EntryPriceUSD,
-      _token1EndPrice,
-      _token2EndPrice
-    );
-
-    uint16 maxImpermanentLoss = protectionConfig.maxILProtected();
-
-    if (impermanentLoss > maxImpermanentLoss) {
-      impermanentLoss = maxImpermanentLoss;
-    }
-
+  ) internal view returns (uint256, bool) {
     uint256 amountToBePaid = calcAmountToBePaid(
-      impermanentLoss,
       _protection.lpTokensWorthAtBuyTimeUSD,
       _protectionWithMetadata.token1EntryPriceUSD,
       _protectionWithMetadata.token2EntryPriceUSD,
@@ -539,7 +598,7 @@ contract ILProtectionController is ILProtectionControllerInterface, BaseControll
       amountToBePaid = _protectionWithMetadata.maxAmountToBePaid;
     }
 
-    return (amountToBePaid, impermanentLoss, isBelowMin);
+    return (amountToBePaid, isBelowMin);
   }
 
   function getNumOfFinalizedProtections() internal view returns (uint256 count) {

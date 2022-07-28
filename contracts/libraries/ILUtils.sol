@@ -13,7 +13,7 @@ library ILUtils {
     uint256 token1EndPrice,
     uint256 token2EndPrice,
     uint16 maxPrecision
-  ) internal pure returns (uint16) {
+  ) external pure returns (uint16) {
     uint256 rt1 = token1EntryPrice.div(token2EntryPrice);
     uint256 rt2 = token1EndPrice.div(token2EndPrice);
 

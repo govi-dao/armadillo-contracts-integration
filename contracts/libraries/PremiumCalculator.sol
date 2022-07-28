@@ -3,33 +3,56 @@
 pragma solidity ^0.8;
 
 import 'prb-math/contracts/PRBMathUD60x18.sol';
+import 'prb-math/contracts/PRBMathSD59x18.sol';
 
 struct PremiumParams {
-  uint256 A;
-  uint256 X0;
-  uint256 C;
+  int256 A;
+  int256 X0;
+  int256 C;
 }
 
 library PremiumCalculator {
   using PRBMathUD60x18 for uint256;
+  using PRBMathSD59x18 for int256;
 
   function calculatePremium(
     uint256 lpTokensWorthAtBuyTimeUSD,
     uint256 collateral,
     uint256 liquidity,
     PremiumParams memory premiumParams,
-    uint256 cvi
+    uint256 cvi,
+    uint256 premiumGrowthStart,
+    uint256 premiumSlope
+  ) external pure returns (uint256) {
+    uint256 P = calculateP(collateral, liquidity, premiumGrowthStart, premiumSlope);
+
+    int256 xt = int256(cvi);
+
+    return
+      uint256(
+        int256(lpTokensWorthAtBuyTimeUSD).mul(
+          (premiumParams.A.mul((xt - premiumParams.X0).powu(2)) + premiumParams.C).mul(int256(P))
+        )
+      );
+  }
+
+  function calculateP(
+    uint256 collateral,
+    uint256 liquidity,
+    uint256 premiumGrowthStart,
+    uint256 premiumSlope
   ) internal pure returns (uint256) {
-    uint256 P = PRBMathUD60x18.exp(collateral.div(liquidity));
+    int256 signedCollateral = int256(collateral);
+    int256 signedLiquidity = int256(liquidity);
+    int256 signedPremiumGrowthStart = int256(premiumGrowthStart);
+    int256 signedPremiumSlope = int256(premiumSlope);
 
-    uint256 xt = cvi;
-    uint256 x0 = premiumParams.X0;
+    // Due to how pow is calculated - there is an inner log2 calculation that can be negative -
+    // we convert the input values to be signed
 
-    if (cvi < premiumParams.X0) {
-      xt = premiumParams.X0;
-      x0 = cvi;
-    }
-
-    return lpTokensWorthAtBuyTimeUSD.mul((premiumParams.A.mul((xt - x0).powu(2)) + premiumParams.C).mul(P));
+    return
+      PRBMathUD60x18.exp(
+        uint256((signedCollateral.div(signedLiquidity)).pow(signedPremiumGrowthStart).div(signedPremiumSlope))
+      );
   }
 }

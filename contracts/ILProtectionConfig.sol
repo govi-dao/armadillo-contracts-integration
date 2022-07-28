@@ -12,29 +12,49 @@ contract ILProtectionConfig is ILProtectionConfigInterface, BaseController {
   uint16 public override maxILProtected;
   uint16 public override expectedLPTokensValueGrowth;
   bool public override buyILProtectionEnabled;
-  uint16 public override fee;
+  uint16 public override feeComponent;
   uint256[] public policyPeriods;
   uint256 public override minAmountToBePaid;
+  uint256 public override premiumGrowthStart;
+  uint256 public override premiumSlope;
 
   function initialize(
     address _owner,
     uint256 _minAmountToBePaid,
     uint16 _maxILProtected,
     bool _buyILProtectionEnabled,
-    uint16 _fee,
+    uint16 _feeComponent,
     uint16 _expectedLPTokensValueGrowth,
-    uint256[] calldata _policyPeriods
+    uint256[] calldata _policyPeriods,
+    uint256 _premiumGrowthStart,
+    uint256 _premiumSlope
   ) external initializer {
-    validateInitParams(_maxILProtected, _fee, _expectedLPTokensValueGrowth, _policyPeriods);
+    validateInitParams(_maxILProtected, _feeComponent, _expectedLPTokensValueGrowth, _policyPeriods, _premiumSlope);
 
     BaseController.initialize(_owner);
 
     minAmountToBePaid = _minAmountToBePaid;
     maxILProtected = _maxILProtected;
     buyILProtectionEnabled = _buyILProtectionEnabled;
-    fee = _fee;
+    feeComponent = _feeComponent;
     expectedLPTokensValueGrowth = _expectedLPTokensValueGrowth;
     policyPeriods = _policyPeriods;
+    premiumGrowthStart = _premiumGrowthStart;
+    premiumSlope = _premiumSlope;
+  }
+
+  function setPremiumGrowthStart(uint256 _premiumGrowthStart) external override onlyAdmin {
+    emit PremiumGrowthStartChanged(premiumGrowthStart, _premiumGrowthStart);
+
+    premiumGrowthStart = _premiumGrowthStart;
+  }
+
+  function setPremiumSlope(uint256 _premiumSlope) external override onlyAdmin {
+    require(_premiumSlope > 0, 'premiumSlope must be > 0');
+
+    emit PremiumSlopeChanged(premiumSlope, _premiumSlope);
+
+    premiumSlope = _premiumSlope;
   }
 
   function setMinAmountToBePaid(uint256 _minAmountToBePaid) external override onlyAdmin {
@@ -59,12 +79,12 @@ contract ILProtectionConfig is ILProtectionConfigInterface, BaseController {
     buyILProtectionEnabled = _isEnabled;
   }
 
-  function setFee(uint16 _fee) external override onlyAdmin {
-    validateParamRange(_fee);
+  function setFeeComponent(uint16 _feeComponent) external override onlyAdmin {
+    validateParamRange(_feeComponent);
 
-    emit FeeChanged(fee, _fee);
+    emit FeeComponentChanged(feeComponent, _feeComponent);
 
-    fee = _fee;
+    feeComponent = _feeComponent;
   }
 
   function setPolicyPeriodsInSeconds(uint256[] calldata _policyPeriods) external override onlyAdmin {
@@ -103,15 +123,17 @@ contract ILProtectionConfig is ILProtectionConfigInterface, BaseController {
 
   function validateInitParams(
     uint16 _maxILProtected,
-    uint16 _fee,
+    uint16 _feeComponent,
     uint16 _expectedLPTokensValueGrowth,
-    uint256[] calldata _policyPeriods
+    uint256[] calldata _policyPeriods,
+    uint256 _premiumSlope
   ) internal pure {
     validateParamRange(_maxILProtected);
-    validateParamRange(_fee);
+    validateParamRange(_feeComponent);
 
     require(_expectedLPTokensValueGrowth > 0, 'expectedLPTokensValueGrowth should be larger then 0');
     require(_policyPeriods.length > 0, 'Policy periods array is empty');
+    require(_premiumSlope > 0, '_premiumSlope should be larger then 0');
   }
 
   function validateParamRange(uint16 param) internal pure {

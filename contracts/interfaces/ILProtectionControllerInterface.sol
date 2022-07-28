@@ -3,6 +3,7 @@
 pragma solidity ^0.8;
 
 import '@chainlink/contracts/src/v0.8/KeeperCompatible.sol';
+import '@coti-cvi/contracts-cvi/contracts/CVIOracle.sol';
 import './ILProtectionNFTInterface.sol';
 import './ITokenPairRepository.sol';
 import './ILiquidityController.sol';
@@ -37,11 +38,18 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
     uint256 token2EndPriceUSD,
     uint256 collateral
   );
-  event TokenPairRepositoryChanged(ITokenPairRepository prevValue, ITokenPairRepository newValue);
-  event LiquidityControllerChanged(ILiquidityController prevValue, ILiquidityController newValue);
-  event CVIOracleChanged(CVIOracle prevValue, CVIOracle newValue);
-  event ILProtectionConfigChanged(ILProtectionConfigInterface prevValue, ILProtectionConfigInterface newValue);
   event MaxProtectionsInUpkeepChanged(uint256 prevValue, uint256 newValue);
+  event CollateralUpdated(
+    string token1Symbol,
+    string token2Symbol,
+    uint256 protectionId,
+    uint256 prevPairCollateral,
+    uint256 newPairCollateral,
+    uint256 prevCollateral,
+    uint256 newCollateral,
+    uint256 prevLiquidity,
+    uint256 newLiquidity
+  );
 
   function addLiquidity(uint256 _amount) external;
 
@@ -65,14 +73,6 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
 
   function performUpkeep(bytes calldata _performData) external override;
 
-  function setILProtectionConfig(ILProtectionConfigInterface _newInstance) external;
-
-  function setTokenPairRepository(ITokenPairRepository _newInstance) external;
-
-  function setLiquidityController(ILiquidityController _newInstance) external;
-
-  function setCVIOracle(CVIOracle _newInstance) external;
-
   function setMaxILProtected(uint16 _maxILProtected) external;
 
   function setMaxProtectionsInUpkeep(uint8 _maxProtectionsInUpkeep) external;
@@ -80,6 +80,8 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
   function collateral() external view returns (uint256);
 
   function totalLPTokensWorthAtBuyTimeUSD() external view returns (uint256);
+
+  function cumulativeSumLPTokensWorthAtBuyTimeUSD() external view returns (uint256);
 
   function protectionNFT() external view returns (ILProtectionNFTInterface);
 
@@ -93,18 +95,19 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
 
   function getFinalizedProtectionsIds() external view returns (uint256[] memory);
 
-  function calculatePremiumAndMaxAmountToBePaid(
+  function calculatePremiumDetailsAndMaxAmountToBePaid(
     string calldata _token1Symbol,
     string calldata _token2Symbol,
     uint256 _lpTokensWorthAtBuyTimeUSD,
     uint256 _policyPeriod
-  ) external view returns (uint256, uint256);
-
-  function calcEstimatedAmountToBePaid(
-    uint256 _lpTokensWorthAtBuyTimeUSD,
-    uint16 _expectedLPTokensValueGrowth,
-    uint16 _impermanentLoss
-  ) external pure returns (uint256);
+  )
+    external
+    view
+    returns (
+      uint256,
+      uint256,
+      uint256
+    );
 
   function calculateParameterizedPremium(
     uint256 _lpTokensWorthAtBuyTimeUSD,
@@ -113,7 +116,15 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
     uint256 _liquidity,
     uint16 _impermanentLoss,
     PremiumParams calldata _premiumParams,
-    uint256 _cvi
+    uint256 _cvi,
+    uint256 _initialGlobalPremiumParam,
+    uint256 _maxGlobalPremiumParam
+  ) external pure returns (uint256);
+
+  function calcEstimatedAmountToBePaid(
+    uint256 _lpTokensWorthAtBuyTimeUSD,
+    uint16 _expectedLPTokensValueGrowth,
+    uint16 _impermanentLoss
   ) external pure returns (uint256);
 
   function calculateIL(
@@ -126,7 +137,6 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
   function calculateOpenProtectionIL(uint256 _protectionId) external view returns (uint16);
 
   function calcAmountToBePaid(
-    uint16 _impermanentLoss,
     uint256 _lpTokensWorthAtBuyTimeUSD,
     uint256 _token1EntryPrice,
     uint256 _token2EntryPrice,
@@ -134,7 +144,12 @@ interface ILProtectionControllerInterface is IBaseController, KeeperCompatibleIn
     uint256 _token2EndPrice
   ) external view returns (uint256);
 
-  function calcMaxValueOfTokensWorthToProtect() external view returns (uint256);
+  function calcMaxValueOfTokensWorthToProtect(string memory _token1Symbol, string memory _token2Symbol)
+    external
+    view
+    returns (uint256);
 
   function calcAmountToBePaidWithProtectionId(uint256 _protectionId) external view returns (uint256);
+
+  function calculateFee(uint256 _lpTokensWorthAtBuyTimeUSD, uint16 _feeComponent) external pure returns (uint256);
 }

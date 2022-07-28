@@ -7,8 +7,10 @@ interface ILProtectionConfigInterface {
   event MaxILProtectedChanged(uint16 prevValue, uint16 newValue);
   event BuyILProtectionEnabledChanged(bool prevValue, bool newValue);
   event PolicyPeriodChanged(uint256[] prevValue, uint256[] newValue);
-  event FeeChanged(uint16 prevValue, uint16 newValue);
+  event FeeComponentChanged(uint16 prevValue, uint16 newValue);
   event ExpectedLPTokensValueGrowthChanged(uint16 prevValue, uint16 newValue);
+  event PremiumGrowthStartChanged(uint256 prevValue, uint256 newValue);
+  event PremiumSlopeChanged(uint256 prevValue, uint256 newValue);
 
   function setMinAmountToBePaid(uint256 _minAmountToBePaid) external;
 
@@ -16,7 +18,7 @@ interface ILProtectionConfigInterface {
 
   function setBuyILProtectionEnabled(bool _isEnabled) external;
 
-  function setFee(uint16 _fee) external;
+  function setFeeComponent(uint16 _feeComponent) external;
 
   function setPolicyPeriodsInSeconds(uint256[] calldata _policyPeriods) external;
 
@@ -28,11 +30,19 @@ interface ILProtectionConfigInterface {
 
   function buyILProtectionEnabled() external view returns (bool);
 
-  function fee() external view returns (uint16);
+  function feeComponent() external view returns (uint16);
 
   function expectedLPTokensValueGrowth() external view returns (uint16);
 
   function getPolicyPeriodsInSeconds() external view returns (uint256[] memory);
 
   function policyPeriodExists(uint256 _policyPeriod) external view returns (bool);
+
+  function premiumGrowthStart() external view returns (uint256);
+
+  function premiumSlope() external view returns (uint256);
+
+  function setPremiumGrowthStart(uint256 _premiumGrowthStart) external;
+
+  function setPremiumSlope(uint256 _premiumSlope) external;
 }

@@ -12,6 +12,7 @@ contract TokenPairRepository is ITokenPairRepository, BaseController {
   mapping(string => mapping(string => TokenPair)) public tokensPairs;
   mapping(string => mapping(string => mapping(uint256 => PremiumParams))) public tokensPairsPremiumParams;
   TokenPair[] public tokensPairsList;
+  mapping(string => mapping(string => uint16)) public tokensPairsCollateralCapComponents;
 
   function initialize(
     address _owner,
@@ -100,6 +101,25 @@ contract TokenPairRepository is ITokenPairRepository, BaseController {
     }
   }
 
+  function setCollateralCapComponent(
+    string calldata _token1Symbol,
+    string calldata _token2Symbol,
+    uint16 _collateralCapComponent
+  ) external override onlyAdmin {
+    require(_collateralCapComponent <= MAX_PRECISION, 'collateralCapComponent is out of range');
+
+    TokenPair memory pair = getOrderedTokenPairIfExists(_token1Symbol, _token2Symbol);
+
+    emit CollateralCapComponentChanged(
+      pair.token1Symbol,
+      pair.token2Symbol,
+      tokensPairsCollateralCapComponents[pair.token1Symbol][pair.token2Symbol],
+      _collateralCapComponent
+    );
+
+    tokensPairsCollateralCapComponents[pair.token1Symbol][pair.token2Symbol] = _collateralCapComponent;
+  }
+
   function setPriceTokenDecimals(uint8 _priceTokenDecimals) external override onlyAdmin {
     require(tokensPairsList.length > 0, 'No existing tokens pairs');
 
@@ -152,6 +172,17 @@ contract TokenPairRepository is ITokenPairRepository, BaseController {
     TokenPair memory pair = getOrderedTokenPairIfExists(_token1Symbol, _token2Symbol);
 
     return tokensPairsPremiumParams[pair.token1Symbol][pair.token2Symbol][_policyPeriod];
+  }
+
+  function getCollateralCapComponent(string calldata _token1Symbol, string calldata _token2Symbol)
+    external
+    view
+    override
+    returns (uint16)
+  {
+    TokenPair memory pair = getOrderedTokenPairIfExists(_token1Symbol, _token2Symbol);
+
+    return tokensPairsCollateralCapComponents[pair.token1Symbol][pair.token2Symbol];
   }
 
   function getOrderedTokenPairIfExists(string calldata _token1Symbol, string calldata _token2Symbol)
